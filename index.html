@@ -23,6 +23,7 @@ canvas{display:block;image-rendering:pixelated;max-width:100%;max-height:100%;ba
 .hidden{display:none!important;}
 #muteBtn{position:absolute;bottom:12px;right:12px;z-index:8;background:rgba(0,0,20,0.7);border:2px solid #ffd700;border-radius:8px;font-size:18px;padding:6px 10px;cursor:pointer;line-height:1;}
 #muteBtn:active{transform:scale(.92);}
+#confetti{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:20;display:none;}
 </style>
 </head>
 <body>
@@ -53,9 +54,23 @@ canvas{display:block;image-rendering:pixelated;max-width:100%;max-height:100%;ba
     <h2>🎉 С ДНЁМ РОЖДЕНИЯ<br>ЕВГЕНИЙ МЕЛЛО! 🎉</h2>
     <p>Ты прорвался сквозь всех рыб<br>и заслужил это поздравление!<br><br>Будь таким же крутым<br>как сегодня — всегда.<br>Саабы, гештальт и доброта —<br>лучшая комбинация на свете.</p>
     <div class="from">— с любовью от друга 🥂</div>
+
+    <button class="btn" id="giftBtn" style="font-size:clamp(8px,2.3vw,9px);padding:12px 22px;background:#2a9d2a;">🎁 ВЫБРАТЬ ПОДАРОК</button>
+
+    <div id="giftChoices" class="hidden" style="display:flex;flex-direction:column;gap:10px;align-items:center;">
+      <p style="font-size:clamp(7px,2.2vw,9px);">Выбери свой подарок:</p>
+      <button class="btn gift" data-g="🪱 Опарыши для рекордной рыбалки!" style="font-size:clamp(7px,2.1vw,9px);padding:10px 18px;">1 — 🪱 ОПАРЫШИ</button>
+      <button class="btn gift" data-g="🚗 Новая машина под капотом мечты!" style="font-size:clamp(7px,2.1vw,9px);padding:10px 18px;">2 — 🚗 НОВАЯ МАШИНА</button>
+      <button class="btn gift" data-g="🤗 Самые крепкие обнимашки на свете!" style="font-size:clamp(7px,2.1vw,9px);padding:10px 18px;">3 — 🤗 ОБНИМАШКИ</button>
+    </div>
+
+    <div id="giftResult" class="from hidden" style="color:#ffd700;font-size:clamp(7px,2.3vw,9px);"></div>
+
     <button class="btn" id="winBtn" style="font-size:clamp(8px,2.3vw,9px);padding:12px 22px;">▶ ЕЩЁ РАЗ</button>
   </div>
 </div>
+
+<canvas id="confetti"></canvas>
 
 <script>
 const canvas = document.getElementById('c');
@@ -352,6 +367,9 @@ function loop(ts){
 function startGame(){
   initAudio();
   resetState();
+  giftBtn.classList.remove('hidden');
+  giftChoices.classList.add('hidden');
+  giftResult.classList.add('hidden');
   document.getElementById('startScreen').classList.add('hidden');
   document.getElementById('loseScreen').classList.add('hidden');
   document.getElementById('winScreen').classList.add('hidden');
@@ -368,6 +386,68 @@ function endGame(won){
   if (won) sndWin(); else sndHit();
   document.getElementById('hud').classList.add('hidden');
   document.getElementById(won ? 'winScreen' : 'loseScreen').classList.remove('hidden');
+}
+
+// ---------- GIFT PICKER + CONFETTI ----------
+const giftBtn = document.getElementById('giftBtn');
+const giftChoices = document.getElementById('giftChoices');
+const giftResult = document.getElementById('giftResult');
+
+giftBtn.addEventListener('click', ()=>{
+  giftBtn.classList.add('hidden');
+  giftChoices.classList.remove('hidden');
+});
+
+document.querySelectorAll('.gift').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    giftChoices.classList.add('hidden');
+    giftResult.textContent = b.dataset.g;
+    giftResult.classList.remove('hidden');
+    launchConfetti();
+    sndWin();
+  });
+});
+
+const confCanvas = document.getElementById('confetti');
+const confCtx = confCanvas.getContext('2d');
+let confParts = [], confAnim = null;
+const confColors = ['#ffd700','#e52521','#00d800','#5c94fc','#ff7ad9','#fff'];
+
+function launchConfetti(){
+  confCanvas.width = window.innerWidth;
+  confCanvas.height = window.innerHeight;
+  confCanvas.style.display = 'block';
+  confParts = [];
+  for (let i=0;i<160;i++){
+    confParts.push({
+      x: Math.random()*confCanvas.width,
+      y: -20 - Math.random()*confCanvas.height*0.5,
+      vx: (Math.random()-0.5)*3,
+      vy: 2 + Math.random()*4,
+      s: 5 + Math.random()*7,
+      rot: Math.random()*Math.PI,
+      vr: (Math.random()-0.5)*0.3,
+      c: confColors[Math.floor(Math.random()*confColors.length)]
+    });
+  }
+  if (confAnim) cancelAnimationFrame(confAnim);
+  confLoop();
+  setTimeout(()=>{ if(confAnim) cancelAnimationFrame(confAnim); confAnim=null; confCanvas.style.display='none'; }, 4500);
+}
+
+function confLoop(){
+  confCtx.clearRect(0,0,confCanvas.width,confCanvas.height);
+  confParts.forEach(p=>{
+    p.x += p.vx; p.y += p.vy; p.vy += 0.04; p.rot += p.vr;
+    confCtx.save();
+    confCtx.translate(p.x,p.y); confCtx.rotate(p.rot);
+    confCtx.fillStyle = p.c;
+    confCtx.fillRect(-p.s/2,-p.s/2,p.s,p.s*0.6);
+    confCtx.restore();
+  });
+  confParts = confParts.filter(p=>p.y < confCanvas.height+20);
+  if (confParts.length) confAnim = requestAnimationFrame(confLoop);
+  else { confCanvas.style.display='none'; confAnim=null; }
 }
 
 // initial draw
