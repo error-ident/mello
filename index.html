@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Super Evgeny Birthday Quest</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{width:100%;height:100%;background:#5c94fc;font-family:'Press Start 2P',monospace;overflow:hidden;touch-action:none;}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}
+canvas{display:block;image-rendering:pixelated;max-width:100%;max-height:100%;background:#5c94fc;}
+.overlay{position:absolute;inset:0;background:rgba(0,0,20,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:10;padding:18px;text-align:center;}
+.overlay h1{color:#ffd700;font-size:clamp(11px,3.4vw,16px);line-height:2;text-shadow:3px 3px #8b0000;}
+.overlay h2{color:#ffd700;font-size:clamp(10px,3.2vw,15px);line-height:2;text-shadow:3px 3px #8b0000;animation:blink .8s infinite;}
+.overlay p{color:#fff;font-size:clamp(7px,2.2vw,9px);line-height:2.2;max-width:420px;}
+.overlay .from{color:#adf;font-size:clamp(6px,2vw,8px);margin-top:6px;}
+.btn{background:#e52521;color:#fff;border:3px solid #ffd700;font-family:'Press Start 2P',monospace;font-size:clamp(9px,2.6vw,11px);padding:14px 26px;cursor:pointer;text-shadow:2px 2px #000;box-shadow:4px 4px #000;transition:transform .1s;}
+.btn:active{transform:scale(.95);}
+.lose h2{color:#ff5050;animation:none;}
+#hud{position:absolute;top:10px;left:0;width:100%;display:flex;justify-content:space-between;padding:0 14px;color:#fff;font-size:clamp(7px,2.2vw,9px);text-shadow:2px 2px #000;z-index:5;pointer-events:none;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+.hidden{display:none!important;}
+#muteBtn{position:absolute;bottom:12px;right:12px;z-index:8;background:rgba(0,0,20,0.7);border:2px solid #ffd700;border-radius:8px;font-size:18px;padding:6px 10px;cursor:pointer;line-height:1;}
+#muteBtn:active{transform:scale(.92);}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div id="hud" class="hidden">
+    <span id="score">МОНЕТЫ: 0</span>
+    <span id="lives">❤️❤️❤️❤️❤️</span>
+  </div>
+
+  <button id="muteBtn">🔊</button>
+  <audio id="bgm" src="music.mp3" loop preload="auto"></audio>
+
+  <div id="startScreen" class="overlay">
+    <h1>🎮 SUPER EVGENY<br>BIRTHDAY QUEST</h1>
+    <p>Помоги Евгению пролететь<br>сквозь рыб до поздравления!<br><br>ПРОБЕЛ / ТАП / КЛИК — взмах вверх</p>
+    <button class="btn" id="startBtn">▶ ИГРАТЬ!</button>
+  </div>
+
+  <div id="loseScreen" class="overlay lose hidden">
+    <h2>💀 ПОДАРКА НЕ ПОЛУЧИЛ!</h2>
+    <p>Евгения сожрали рыбы…<br>Попробуй ещё раз 💪</p>
+    <button class="btn" id="loseBtn">▶ ПОПРОБОВАТЬ СНОВА</button>
+  </div>
+
+  <div id="winScreen" class="overlay hidden">
+    <h2>🎉 С ДНЁМ РОЖДЕНИЯ<br>ЕВГЕНИЙ МЕЛЛО! 🎉</h2>
+    <p>Ты прорвался сквозь всех рыб<br>и заслужил это поздравление!<br><br>Будь таким же крутым<br>как сегодня — всегда.<br>Саабы, гештальт и доброта —<br>лучшая комбинация на свете.</p>
+    <div class="from">— с любовью от друга 🥂</div>
+    <button class="btn" id="winBtn" style="font-size:clamp(8px,2.3vw,9px);padding:12px 22px;">▶ ЕЩЁ РАЗ</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 680, H = 420;
+canvas.width = W;
+canvas.height = H;
+
+const GROUND = H - 50;        // floor line
+const CEIL   = 0;
+const GRAVITY = 0.45;
+const FLAP   = -7.2;
+
+// ~60s to win at 60fps: distance grows ~ scrollSpeed/frame
+const WIN_TIME = 62;          // seconds needed to reach the goal
+
+let state = 'start';          // start | play | win | lose
+let score = 0, lives = 5;
+let elapsed = 0;              // seconds survived
+let lastTime = 0;
+
+const player = { x: 120, y: H/2, w: 38, h: 46, vy: 0, invincible: 0, tilt: 0 };
+
+let fishes = [], coins = [], clouds = [];
+let fishTimer = 0, coinTimer = 0;
+let goalActive = false, goalX = 0;
+
+// ---------- AUDIO ----------
+const bgm = document.getElementById('bgm');
+const muteBtn = document.getElementById('muteBtn');
+let muted = false;
+let audioCtx = null;
+bgm.volume = 0.45;
+
+function initAudio(){
+  if (!audioCtx){
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e){ audioCtx = null; }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// 8-bit beep: type='square' for retro feel
+function beep(freq, dur, type='square', vol=0.15){
+  if (muted || !audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.value = vol;
+  o.connect(g); g.connect(audioCtx.destination);
+  const t = audioCtx.currentTime;
+  o.start(t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.stop(t + dur);
+}
+
+function sndFlap(){ beep(520, 0.12, 'square', 0.12); }
+function sndCoin(){ beep(880, 0.07, 'square', 0.14); setTimeout(()=>beep(1320,0.10,'square',0.14),70); }
+function sndHit(){ beep(160, 0.25, 'sawtooth', 0.18); }
+function sndWin(){
+  [523,659,784,1047].forEach((f,i)=> setTimeout(()=>beep(f,0.18,'square',0.16), i*150));
+}
+
+function playMusic(){ if (!muted){ bgm.play().catch(()=>{}); } }
+function stopMusic(){ bgm.pause(); }
+
+muteBtn.addEventListener('click', e=>{
+  e.stopPropagation();
+  muted = !muted;
+  muteBtn.textContent = muted ? '🔇' : '🔊';
+  if (muted) stopMusic(); else if (state==='play') playMusic();
+});
+
+function flap(){
+  if (state !== 'play') return;
+  player.vy = FLAP;
+  sndFlap();
+}
+
+// input
+window.addEventListener('keydown', e => { if (e.code === 'Space'){ e.preventDefault(); flap(); }});
+canvas.addEventListener('mousedown', e => { e.preventDefault(); flap(); });
+canvas.addEventListener('touchstart', e => { e.preventDefault(); flap(); }, {passive:false});
+
+document.getElementById('startBtn').onclick = startGame;
+document.getElementById('loseBtn').onclick  = startGame;
+document.getElementById('winBtn').onclick   = startGame;
+
+// ---------- spawning ----------
+function spawnFish(){
+  // pair them like flappy pipes: gap the player flies through
+  const gapH = 150 - Math.min(elapsed * 0.9, 55);   // shrinks over time, min ~95
+  const gapY = 70 + Math.random() * (GROUND - 140 - gapH);
+  const speed = 2.6 + elapsed * 0.045;
+  // top fish (diving down) + bottom fish (rising up)
+  fishes.push({ x: W + 20, y: gapY - 36, w: 42, h: 32, speed, dir: 1 });
+  fishes.push({ x: W + 20, y: gapY + gapH, w: 42, h: 32, speed, dir: -1 });
+}
+
+function spawnCoin(){
+  coins.push({ x: W + 20, y: 60 + Math.random() * (GROUND - 120), w: 18, h: 18, speed: 2.8 });
+}
+
+function resetState(){
+  player.x = 120; player.y = H/2 - 30; player.vy = FLAP; player.invincible = 60; player.tilt = 0;
+  fishes = []; coins = [];
+  clouds = [{x:120,y:50,s:1},{x:340,y:30,s:.8},{x:560,y:70,s:1.2}];
+  fishTimer = 150; coinTimer = 60;   // ~2.5s grace before first fish
+  score = 0; lives = 5; elapsed = 0;
+  goalActive = false; goalX = W + 60;
+  document.getElementById('score').textContent = 'МОНЕТЫ: 0';
+  document.getElementById('lives').textContent = '❤️❤️❤️❤️❤️';
+}
+
+// ---------- drawing ----------
+function drawSky(){
+  ctx.fillStyle = '#5c94fc'; ctx.fillRect(0,0,W,H);
+  clouds.forEach(c=>{
+    ctx.fillStyle='#fff'; const s=c.s*14;
+    [[0,1],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2],[3,1]].forEach(([dx,dy])=>{
+      ctx.fillRect(c.x+dx*s, c.y+dy*s*0.6, s, s*0.6);
+    });
+  });
+}
+function drawGround(){
+  ctx.fillStyle='#00a800'; ctx.fillRect(0,GROUND,W,16);
+  ctx.fillStyle='#00d800'; for(let x=0;x<W;x+=16) ctx.fillRect(x,GROUND,16,8);
+  ctx.fillStyle='#c84c0c'; ctx.fillRect(0,GROUND+16,W,H-GROUND-16);
+  ctx.strokeStyle='#8b2800';
+  for(let x=0;x<W;x+=16) for(let y=GROUND+16;y<H;y+=16) ctx.strokeRect(x,y,16,16);
+}
+function drawPlayer(){
+  if (player.invincible>0 && Math.floor(player.invincible/4)%2===0) return;
+  const px=player.x, py=player.y, w=player.w, h=player.h;
+  ctx.save();
+  ctx.translate(px+w/2, py+h/2);
+  ctx.rotate(Math.max(-0.4, Math.min(0.7, player.tilt)));
+  ctx.translate(-(px+w/2), -(py+h/2));
+
+  ctx.fillStyle='#1a1a2e'; ctx.fillRect(px-2, py+18, w+4, h-18);   // jacket
+  ctx.fillStyle='#111';    ctx.fillRect(px, py, w, 26);            // hood
+  ctx.fillStyle='#2a2a2a'; ctx.fillRect(px+4, py+6, w-8, 14);      // face
+  // goggles
+  ctx.fillStyle='#333';
+  ctx.beginPath(); ctx.ellipse(px+12,py+11,9,7,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(px+26,py+11,9,7,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#0a3a5a';
+  ctx.beginPath(); ctx.ellipse(px+12,py+11,7,5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(px+26,py+11,7,5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(150,220,255,0.4)'; ctx.fillRect(px+8,py+8,4,3); ctx.fillRect(px+22,py+8,4,3);
+  ctx.fillStyle='#4a9a4a'; ctx.fillRect(px+10,py+12,4,3); ctx.fillRect(px+24,py+12,4,3); // eyes
+  ctx.fillStyle='#111'; ctx.fillRect(px+2, py+16, w-4, 9);         // mask
+  // arms (flap up when rising)
+  ctx.fillStyle='#1a1a2e';
+  const armY = player.vy < 0 ? py+22 : py+28;
+  ctx.fillRect(px-8, armY, 10, 6); ctx.fillRect(px+w-2, armY, 10, 6);
+  // legs + shoes
+  ctx.fillStyle='#0d0d1e'; ctx.fillRect(px+4, py+h-12, 12, 12); ctx.fillRect(px+w-16, py+h-12, 12, 12);
+  ctx.fillStyle='#333';    ctx.fillRect(px+2, py+h-5, 14, 5);     ctx.fillRect(px+w-16, py+h-5, 14, 5);
+  ctx.restore();
+}
+function drawFish(f){
+  const fx=f.x, fy=f.y;
+  ctx.fillStyle='#e05020'; ctx.fillRect(fx,fy+8,30,16);
+  ctx.fillStyle='#c03010'; ctx.fillRect(fx+28,fy+4,12,8); ctx.fillRect(fx+28,fy+16,12,8);
+  ctx.fillStyle='#f4a060'; ctx.fillRect(fx+4,fy+12,20,6);
+  ctx.fillStyle='#fff';    ctx.fillRect(fx+4,fy+9,8,7);
+  ctx.fillStyle='#111';    ctx.fillRect(fx+6,fy+11,4,4);
+  ctx.fillStyle='#111';    ctx.fillRect(fx+1,fy+18,6,2);
+  ctx.fillStyle='#c03010'; ctx.fillRect(fx+12,fy+2,8,8);
+}
+function drawCoin(c){
+  ctx.fillStyle='#ffd700'; ctx.fillRect(c.x+2,c.y,14,18);
+  ctx.fillStyle='#ffec60'; ctx.fillRect(c.x+4,c.y+2,10,6);
+  ctx.fillStyle='#c8a000'; ctx.fillRect(c.x+4,c.y+12,10,4);
+  ctx.fillStyle='#1a1a2e'; ctx.fillRect(c.x+7,c.y+6,4,6); ctx.fillRect(c.x+6,c.y+5,6,2);
+}
+function drawGoal(){
+  const px=goalX;
+  ctx.fillStyle='#00a800'; ctx.fillRect(px,GROUND-90,52,90);
+  ctx.fillStyle='#00d800'; ctx.fillRect(px+4,GROUND-90,16,90);
+  ctx.fillStyle='#00a800'; ctx.fillRect(px-6,GROUND-102,64,20);
+  ctx.fillStyle='#00d800'; ctx.fillRect(px-2,GROUND-102,16,20);
+  ctx.fillStyle='#333';    ctx.fillRect(px+50,GROUND-180,4,90);
+  ctx.fillStyle='#e52521'; ctx.fillRect(px+54,GROUND-180,28,20);
+  ctx.fillStyle='#ffd700'; ctx.font='14px serif'; ctx.fillText('★',px+60,GROUND-166);
+}
+function drawProgress(){
+  const barW=200, barH=10, bx=W/2-barW/2, by=14;
+  ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(bx,by,barW,barH);
+  ctx.fillStyle='#ffd700'; ctx.fillRect(bx,by,barW*Math.min(elapsed/WIN_TIME,1),barH);
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.strokeRect(bx,by,barW,barH);
+  ctx.fillStyle='#fff'; ctx.font='6px "Press Start 2P"'; ctx.textAlign='center';
+  ctx.fillText('ДО ДР',W/2,by-3); ctx.textAlign='left';
+}
+
+// ---------- collision ----------
+function overlap(a,b,s=8){
+  return a.x+s < b.x+b.w-s && a.x+a.w-s > b.x+s &&
+         a.y+s < b.y+b.h-s && a.y+a.h-s > b.y+s;
+}
+
+function hitPlayer(){
+  lives--;
+  player.invincible = 80;
+  sndHit();
+  document.getElementById('lives').textContent = ['','❤️','❤️❤️','❤️❤️❤️','❤️❤️❤️❤️','❤️❤️❤️❤️❤️'][Math.max(0,lives)];
+  if (lives <= 0) endGame(false);
+}
+
+// ---------- loop ----------
+function update(dt){
+  elapsed += dt;
+
+  // start spawning the goal in the last few seconds
+  if (!goalActive && elapsed >= WIN_TIME - 4){ goalActive = true; goalX = W + 60; }
+
+  // player physics (frame-rate independent)
+  const ss = dt * 60;
+  player.vy += GRAVITY * ss;
+  player.y  += player.vy * ss;
+  player.tilt = player.vy * 0.05;
+  if (player.invincible>0) player.invincible -= ss;
+
+  // floor: bounce up once, damage only on a fresh hit
+  if (player.y + player.h >= GROUND){
+    player.y = GROUND - player.h;
+    if (player.invincible <= 0){ player.vy = FLAP; hitPlayer(); }
+    else player.vy = 0;
+  }
+  if (player.y <= CEIL){ player.y = CEIL; player.vy = 0; }
+
+  if (state !== 'play') return;
+
+  const speedScale = ss;
+
+  // clouds
+  clouds.forEach(c=>{ c.x -= 0.5*speedScale; if (c.x < -120) c.x = W+10; });
+
+  // fish
+  if (!goalActive){
+    fishTimer -= speedScale;
+    if (fishTimer <= 0){
+      fishTimer = Math.max(70, 130 - elapsed*1.1);
+      spawnFish();
+    }
+  }
+  fishes.forEach(f=>{ f.x -= f.speed*speedScale; });
+  fishes = fishes.filter(f=>f.x > -60);
+
+  // coins
+  coinTimer -= speedScale;
+  if (coinTimer <= 0){ coinTimer = 75; spawnCoin(); }
+  coins.forEach(c=>{ c.x -= c.speed*speedScale; });
+  coins = coins.filter(c=>{
+    if (overlap(player,c,3)){
+      score++; document.getElementById('score').textContent='МОНЕТЫ: '+score; sndCoin();
+      return false;
+    }
+    return c.x > -30;
+  });
+
+  // fish collision
+  if (player.invincible<=0){
+    for (const f of fishes){ if (overlap(player,f,7)){ hitPlayer(); break; } }
+  }
+
+  // goal
+  if (goalActive){
+    goalX -= (2.6 + elapsed*0.045) * speedScale;
+    if (goalX < player.x){ endGame(true); }
+  }
+}
+
+function render(){
+  drawSky();
+  drawGround();
+  if (goalActive) drawGoal();
+  coins.forEach(drawCoin);
+  fishes.forEach(drawFish);
+  drawPlayer();
+  drawProgress();
+}
+
+function loop(ts){
+  if (state !== 'play'){ render(); return; }
+  let dt = (ts - lastTime) / 1000; lastTime = ts;
+  if (dt > 0.05) dt = 0.05;            // clamp big frame gaps
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+function startGame(){
+  initAudio();
+  resetState();
+  document.getElementById('startScreen').classList.add('hidden');
+  document.getElementById('loseScreen').classList.add('hidden');
+  document.getElementById('winScreen').classList.add('hidden');
+  document.getElementById('hud').classList.remove('hidden');
+  state = 'play';
+  bgm.currentTime = 0;
+  playMusic();
+  requestAnimationFrame(ts=>{ lastTime = ts; loop(ts); });
+}
+
+function endGame(won){
+  state = won ? 'win' : 'lose';
+  stopMusic();
+  if (won) sndWin(); else sndHit();
+  document.getElementById('hud').classList.add('hidden');
+  document.getElementById(won ? 'winScreen' : 'loseScreen').classList.remove('hidden');
+}
+
+// initial draw
+render();
+</script>
+</body>
+</html>
